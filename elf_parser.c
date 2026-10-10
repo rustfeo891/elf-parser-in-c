@@ -11,6 +11,13 @@
 	   return errno; \
 	} 
 
+
+#define log_error_exit(is_ok,e_msg) \
+        if (is_ok<0){ \
+           fprintf(stderr,e_msg,strerror(errno)); \
+           exit(errno); \
+        }    
+
 uint16_t parse_half(unsigned char* ctx,uint64_t* idx){
    uint16_t half=0;
    for(uint32_t i=0;i<2;i++) half|=ctx[(*idx)++]<<(i*8);
@@ -428,48 +435,88 @@ unsigned char** get_segment(Elf64_Ehdr elf_hdr,Elf64_Shdr* elf_shdr,unsigned cha
    return segment_arr;
 }
 
+void free_segment(unsigned char** segment_arr,Elf64_Ehdr elf_hdr){
+   for (uint16_t i=0;i<elf_hdr.e_shnum;++i){
+       free(segment_arr[i]);
+   }
+   free(segment_arr);
+}
+
+unsigned char* read_file(char* path){
+   FILE* fptr=fopen(path,"rb");
+   if(fptr==NULL){
+      fprintf(stderr,"FOPEN::ERROR;%s\n",strerror(errno));
+      exit(-1);
+   }
+   int32_t is_ok=fseek(fptr,0,SEEK_END);
+   log_error_exit(is_ok,"FSEEK::ERROR:%s\n");
+   int64_t filesize=ftell(fptr);
+   log_error_exit(filesize,"FTELL::ERROR:%s\n");
+   rewind(fptr);
+   unsigned char* ctx=calloc(filesize,sizeof(unsigned char));
+   if(ctx==NULL){
+     fclose(fptr);
+     fprintf(stderr,"CALLOC::ERROR:%s\n",strerror(errno));
+     exit(-1);
+   }
+   int64_t read_size=fread(ctx,sizeof(unsigned char),filesize,fptr);
+   if(read_size!=filesize){
+      fprintf(stderr,"FREAD::ERROR:\n");
+      exit(-1);
+   }
+   fclose(fptr);
+   return ctx;
+}
+
+Elf64_Phdr* allocate_Elf_Phdr(Elf64_Ehdr elf_hdr){
+    Elf64_Phdr* elf_phdr=calloc(elf_hdr.e_phnum,sizeof(Elf64_Phdr));
+    return elf_phdr;
+}
+
+Elf64_Shdr* allocate_Elf_Shdr(Elf64_Ehdr elf_hdr){
+    Elf64_Shdr* elf_shdr=calloc(elf_hdr.e_shnum,sizeof(Elf64_Shdr));
+    return elf_shdr;
+} 
+
+void get_elf64phdr(Elf64_Phdr* elf_phdr,unsigned char* ctx,Elf64_Ehdr elf_hdr){
+   uint64_t phdr_idx=elf_hdr.e_phoff;
+   for (uint16_t i = 0; i < elf_hdr.e_phnum; ++i) parse_elf64phdr(&elf_phdr[i],ctx,&phdr_idx);
+}
+
+void print_elf64phdr(Elf64_Ehdr elf_hdr,Elf64_Phdr* elf_phdr){
+   for (uint16_t i = 0; i < elf_hdr.e_phnum; ++i) dump_elf64phdr(elf_phdr[i]);
+}
+
+void get_elf64shdr(Elf64_Shdr* elf_shdr,unsigned char* ctx,Elf64_Ehdr elf_hdr){
+   uint64_t shdr_idx=elf_hdr.e_shoff;
+   for (uint16_t i = 0; i < elf_hdr.e_shnum; ++i) parse_elfshdr(&elf_shdr[i],ctx,&shdr_idx);
+}
+
+void print_elf64shdr(Elf64_Shdr* elf_shdr,unsigned char* ctx,Elf64_Ehdr elf_hdr){
+   for (uint16_t i = 0; i < elf_hdr.e_shnum; ++i) dump_elf64shdr(elf_shdr[i],elf_shdr,elf_hdr,ctx);
+}
+
 int32_t main(int32_t argc,char* argv[]){
    if(argc<2){
       fprintf(stderr,"you should give on eexecutable argumemnt\n");
       return -1;
    }
    char* path=argv[1];
-   FILE* fptr=fopen(path,"rb");
-   if(fptr==NULL){
-      fprintf(stderr,"FOPEN::ERROR;%s\n",strerror(errno));
-      return errno;
-   }
-   int32_t is_ok=fseek(fptr,0,SEEK_END);
-   log_error(is_ok,"FSEEK::ERROR:%s\n");
-   int64_t filesize=ftell(fptr);
-   log_error(filesize,"FTELL::ERROR:%s\n");
-   rewind(fptr);
-   unsigned char* ctx=calloc(filesize,sizeof(unsigned char));
-   if(ctx==NULL){
-     fclose(fptr);
-     fprintf(stderr,"CALLOC::ERROR:%s\n",strerror(errno));
-     return errno;
-   }
-   int64_t read_size=fread(ctx,sizeof(unsigned char),filesize,fptr);
-   if(read_size!=filesize){
-      fprintf(stderr,"FREAD::ERROR:\n");
-      return -1;
-   }
+   unsigned char* ctx=read_file(path);
    Elf64_Ehdr elf_hdr;
    uint64_t ctx_idx=parse_elf64hdr(&elf_hdr,ctx);
    dump_elf64hdr(elf_hdr);
-   Elf64_Phdr* elf_phdr=calloc(elf_hdr.e_phnum,sizeof(Elf64_Phdr));
-   Elf64_Shdr* elf_shdr=calloc(elf_hdr.e_shnum,sizeof(Elf64_Shdr));
+   Elf64_Phdr* elf_phdr=allocate_Elf_Phdr(elf_hdr);
+   Elf64_Shdr* elf_shdr=allocate_Elf_Shdr(elf_hdr);
    uint64_t phdr_idx=elf_hdr.e_phoff;
-   for (uint16_t i = 0; i < elf_hdr.e_phnum; ++i) parse_elf64phdr(&elf_phdr[i],ctx,&phdr_idx);
-   for (uint16_t i = 0; i < elf_hdr.e_phnum; ++i) dump_elf64phdr(elf_phdr[i]);
+   get_elf64phdr(elf_phdr,ctx,elf_hdr);
+   print_elf64phdr(elf_hdr,elf_phdr);
    uint64_t shdr_idx=elf_hdr.e_shoff;
-   for (uint16_t i = 0; i < elf_hdr.e_shnum; ++i) parse_elfshdr(&elf_shdr[i],ctx,&shdr_idx);
-   for (uint16_t i = 0; i < elf_hdr.e_shnum; ++i) dump_elf64shdr(elf_shdr[i],elf_shdr,elf_hdr,ctx);
+   get_elf64shdr(elf_shdr,ctx,elf_hdr);
+   print_elf64shdr(elf_shdr,ctx,elf_hdr);
    unsigned char** segment_arr=get_segment(elf_hdr,elf_shdr,ctx);
-   free(segment_arr);
+   free_segment(segment_arr,elf_hdr);
    free(elf_phdr);
    free(elf_shdr);
    free(ctx);
-   fclose(fptr);
 }
